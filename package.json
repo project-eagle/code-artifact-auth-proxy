@@ -1,0 +1,8 @@
+{
+  "name": "caap",
+  "version": "1.0.0",
+  "dependencies": {
+    "@aws-sdk/client-codeartifact": "^3.0.0"
+  },
+  "bin": "./caap.js"
+}
