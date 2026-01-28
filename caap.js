@@ -153,8 +153,8 @@ const caap = http.createServer(async (req, res) => {
                         }
 
                         let text = decompressed.toString('utf8');
-                        const originalUrl = 'https://beam-694112646914.d.codeartifact.us-east-1.amazonaws.com/';
-                        const replacementUrl = 'http://localhost:9998/';
+                        const originalUrl = `https://${upstreamHost}/`;
+                        const replacementUrl = `http://localhost:${DEFAULT_CONFIG.port}/`;
                         
                         if (text.includes(originalUrl)) {
                             // console.log(`Replacing URLs in gzipped response for ${req.url}`);
@@ -185,8 +185,8 @@ const caap = http.createServer(async (req, res) => {
                     });
                 } else {
                     let text = body.toString('utf8');
-                    const originalUrl = 'https://beam-694112646914.d.codeartifact.us-east-1.amazonaws.com/';
-                    const replacementUrl = 'http://localhost:9998/';
+                    const originalUrl = `https://${upstreamHost}/`;
+                    const replacementUrl = `http://localhost:${DEFAULT_CONFIG.port}/`;
 
                     if (text.includes(originalUrl)) {
                         // console.log(`Replacing URLs in non-gzipped response for ${req.url}`);
