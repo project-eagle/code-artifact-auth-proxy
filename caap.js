@@ -3,6 +3,9 @@
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
+const zlib = require('zlib');
+const cluster = require('cluster');
+const os = require('os');
 const { CodeartifactClient, GetAuthorizationTokenCommand } = require("@aws-sdk/client-codeartifact");
 
 let creds = '';
@@ -102,12 +105,12 @@ const caap = http.createServer(async (req, res) => {
         let authHeader;
 
         if(isGet) {
-            if (req.url.includes('/npm/')) {
-                authHeader = `Bearer ${token}`;
-            } else {
+            // if (req.url.includes('/npm/')) {
+            //     authHeader = `Bearer ${token}`;
+            // } else {
                 const credentials = Buffer.from(`aws:${token}`).toString('base64');
                 authHeader = `Basic ${credentials}`;
-            }
+            // }
         }
 
         const options = {
@@ -126,8 +129,85 @@ const caap = http.createServer(async (req, res) => {
         // console.log('options:', options);
 
         const proxyReq = https.request(options, (proxyRes) => {
-            res.writeHead(proxyRes.statusCode, proxyRes.headers);
-            proxyRes.pipe(res, { end: true });
+            const contentEncoding = proxyRes.headers['content-encoding'];
+            const isGzip = contentEncoding === 'gzip';
+
+            let bodyChunks = [];
+            proxyRes.on('data', (chunk) => {
+                bodyChunks.push(chunk);
+            });
+
+            proxyRes.on('end', () => {
+                let body = Buffer.concat(bodyChunks);
+
+                if (isGzip) {
+                    zlib.gunzip(body, (err, decompressed) => {
+                        if (err) {
+                            console.error('Gunzip error:', err);
+                            const headers = { ...proxyRes.headers };
+                            delete headers['transfer-encoding'];
+                            headers['content-length'] = body.length;
+                            res.writeHead(proxyRes.statusCode, headers);
+                            res.end(body);
+                            return;
+                        }
+
+                        let text = decompressed.toString('utf8');
+                        const originalUrl = 'https://beam-694112646914.d.codeartifact.us-east-1.amazonaws.com/';
+                        const replacementUrl = 'http://localhost:9998/';
+                        
+                        if (text.includes(originalUrl)) {
+                            // console.log(`Replacing URLs in gzipped response for ${req.url}`);
+                            text = text.split(originalUrl).join(replacementUrl);
+                            zlib.gzip(text, (err, compressed) => {
+                                if (err) {
+                                    console.error('Gzip error:', err);
+                                    const headers = { ...proxyRes.headers };
+                                    delete headers['transfer-encoding'];
+                                    headers['content-length'] = body.length;
+                                    res.writeHead(proxyRes.statusCode, headers);
+                                    res.end(body);
+                                    return;
+                                }
+                                const headers = { ...proxyRes.headers };
+                                delete headers['transfer-encoding'];
+                                headers['content-length'] = compressed.length;
+                                res.writeHead(proxyRes.statusCode, headers);
+                                res.end(compressed);
+                            });
+                        } else {
+                            const headers = { ...proxyRes.headers };
+                            delete headers['transfer-encoding'];
+                            headers['content-length'] = body.length;
+                            res.writeHead(proxyRes.statusCode, headers);
+                            res.end(body);
+                        }
+                    });
+                } else {
+                    let text = body.toString('utf8');
+                    const originalUrl = 'https://beam-694112646914.d.codeartifact.us-east-1.amazonaws.com/';
+                    const replacementUrl = 'http://localhost:9998/';
+
+                    if (text.includes(originalUrl)) {
+                        // console.log(`Replacing URLs in non-gzipped response for ${req.url}`);
+                        text = text.split(originalUrl).join(replacementUrl);
+                        const updatedBody = Buffer.from(text, 'utf8');
+                        const headers = { ...proxyRes.headers };
+                        delete headers['transfer-encoding'];
+                        headers['content-length'] = updatedBody.length;
+                        res.writeHead(proxyRes.statusCode, headers);
+                        res.end(updatedBody);
+                    } else {
+                        const headers = { ...proxyRes.headers };
+                        delete headers['transfer-encoding'];
+                        headers['content-length'] = body.length;
+                        res.writeHead(proxyRes.statusCode, headers);
+                        res.end(body);
+                    }
+                }
+            });
+
+            // console.log(req.url, proxyRes.statusCode);
         });
 
         proxyReq.on('error', (err) => {
@@ -143,4 +223,18 @@ const caap = http.createServer(async (req, res) => {
     }
 });
 
-caap.listen(DEFAULT_CONFIG.port, () => console.log(`Proxy running on port ${DEFAULT_CONFIG.port}`));
+if (cluster.isMaster) {
+    const numCPUs = os.cpus().length;
+    console.log(`Master ${process.pid} is running. Forking ${numCPUs} workers...`);
+
+    for (let i = 0; i < numCPUs; i++) {
+        cluster.fork();
+    }
+
+    cluster.on('exit', (worker, code, signal) => {
+        console.log(`Worker ${worker.process.pid} died. Forking a replacement...`);
+        cluster.fork();
+    });
+} else {
+    caap.listen(DEFAULT_CONFIG.port, () => console.log(`Worker ${process.pid} started. Proxy running on port ${DEFAULT_CONFIG.port}`));
+}
