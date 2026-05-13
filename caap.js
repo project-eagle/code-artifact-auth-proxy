@@ -224,9 +224,10 @@ const caap = http.createServer(async (req, res) => {
 });
 
 if (cluster.isMaster) {
-    const numCPUs = os.cpus().length;
+    const numCPUs = Math.max(2, Math.min(6, os.cpus().length));
+  
     console.log(`Master ${process.pid} is running. Forking ${numCPUs} workers...`);
-
+    
     for (let i = 0; i < numCPUs; i++) {
         cluster.fork();
     }
